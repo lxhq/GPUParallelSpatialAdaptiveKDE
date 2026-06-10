@@ -1,0 +1,40 @@
+# Build outputs
+build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Compiled binaries and objects
+*.o
+*.so
+*.a
+*.out
+kde_cuda/kde_cuda
+kde_cuda/kde_cuda_kdtr
+kde_cuda/kde_cuda_old
+kde_openmp/kde_omp
+kde_openmp/kde_omp_kdtr
+kde_openmp/kde_omp_kdtr_sequential
+kde_openmp/kde_omp_old
+kde_openmp/kde_omp_old_sequential
+kde_openmp/kde_omp_sequential
+
+# Generated KDE outputs
+den_SEQ.asc
+den_CUDA.asc
+pntsSEQ.csv
+pntsCUDA.csv
+output/
+logs/
+*.log
+
+# Python helper caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# CUDA profiling outputs
+*.nsys-rep
+*.qdrep
+*.ncu-rep

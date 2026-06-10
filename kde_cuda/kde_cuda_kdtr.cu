@@ -34,6 +34,8 @@ void MeanCenter(SamplePoints Points, float &mean_x, float &mean_y);
 // (squared) standard distance of points
 void StandardDistance2(SamplePoints Points, float &d2);
 
+void KarlLikeBandwidthGamma(SamplePoints Points, float b, float &gammaX, float &gammaY);
+
 // bandwidth squared
 inline float BandWidth2(SamplePoints Points){
 	float d2;
@@ -469,6 +471,20 @@ int main(int argc, char *argv[]){
 
 //////////////////////////  CUDA  /////////////////////////////////////////
 	if(SKIPPARA == 0){
+		float karlGammaX, karlGammaY;
+		KarlLikeBandwidthGamma(Points, 1.0f, karlGammaX, karlGammaY);
+		error = cudaMemcpyToSymbol(dKarlGammaX, &karlGammaX, sizeof(float));
+		if (error != cudaSuccess)
+		{
+		   printf("Failed to copy KARL gamma x (error code %s)!\n", cudaGetErrorString(error));
+		   exit(EXIT_FAILURE);
+		}
+		error = cudaMemcpyToSymbol(dKarlGammaY, &karlGammaY, sizeof(float));
+		if (error != cudaSuccess)
+		{
+		   printf("Failed to copy KARL gamma y (error code %s)!\n", cudaGetErrorString(error));
+		   exit(EXIT_FAILURE);
+		}
 
 		DenSurf_CUDA = CopyAsciiRaster(Mask);
 		SamplePoints dPoints = AllocateDeviceSamplePoints(Points);
@@ -891,6 +907,32 @@ void StandardDistance2(SamplePoints Points, float &d2){
 	}
 
 	d2 = sum2 / Points.numberOfPoints;
+}
+
+void KarlLikeBandwidthGamma(SamplePoints Points, float b, float &gammaX, float &gammaY){
+	double sum_x = 0.0;
+	double sum_y = 0.0;
+	double sum2_x = 0.0;
+	double sum2_y = 0.0;
+	int n = Points.numberOfPoints;
+
+	for (int p = 0; p < n; p++){
+		double x = Points.xCoordinates[p];
+		double y = Points.yCoordinates[p];
+		sum_x += x;
+		sum_y += y;
+		sum2_x += x * x;
+		sum2_y += y * y;
+	}
+
+	double mean_x = sum_x / n;
+	double mean_y = sum_y / n;
+	double std_x = sqrt((sum2_x - n * mean_x * mean_x) / n);
+	double std_y = sqrt((sum2_y - n * mean_y * mean_y) / n);
+	double constant = pow((double)n, 1.0 / 6.0) / (2.0 * b);
+
+	gammaX = (float)(constant / std_x);
+	gammaY = (float)(constant / std_y);
 }
 
 // generate random sample points
@@ -2382,15 +2424,15 @@ void SortSamplePoints(SamplePoints Points){
 // By Guiming @ 2016-09-07
 void BuildCPUKDtree (SamplePoints Points){
 	int NPTS = Points.numberOfPoints;
-	data = vector<Point>(NPTS);
+	::data = vector<Point>(NPTS);
 	for(int i = 0; i < NPTS; i++){
-		data[i].coords[0] = Points.xCoordinates[i];
-    data[i].coords[1] = Points.yCoordinates[i];
+		::data[i].coords[0] = Points.xCoordinates[i];
+    ::data[i].coords[1] = Points.yCoordinates[i];
 	}
-	int max_level = (int)(log(data.size())/log(2) / 2) + 1;
-	tree.Create(data, max_level);
+	int max_level = (int)(log(::data.size())/log(2) / 2) + 1;
+	tree.Create(::data, max_level);
 }
 
 void BuildGPUKDtree (){
-		GPU_tree.CreateKDTree(tree.GetRoot(), tree.GetNumNodes(), data);
+		GPU_tree.CreateKDTree(tree.GetRoot(), tree.GetNumNodes(), ::data);
 }

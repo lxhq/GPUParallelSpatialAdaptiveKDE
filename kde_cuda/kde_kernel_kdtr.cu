@@ -22,6 +22,8 @@
 
 __device__ float dReductionSum = 1.0f; // sum of log of densities
 __device__ float dDen0_0 = 1.0f; // sum of log of densities
+__device__ float dKarlGammaX = 1.0f;
+__device__ float dKarlGammaY = 1.0f;
 
 
 __device__ float Distance(const Point &a, const Point &b)
@@ -336,7 +338,7 @@ __global__ void KernelDesityEstimation(float* dHs, const SamplePoints dPoints, c
 	float xLLCorner = dAscii.xLLCorner;
 	float yLLCorner = dAscii.yLLCorner;
 	float noDataValue = dAscii.noDataValue;
-	float cell_x, cell_y; // x,y coord of cell
+	float cell_x, cell_y, dx, dy; // x,y coord of cell
 	float p_x, p_y, p_w;    // x, y coord, weight of point
 	int numPoints = dPoints.numberOfPoints;
 	float h, d2;
@@ -367,10 +369,9 @@ __global__ void KernelDesityEstimation(float* dHs, const SamplePoints dPoints, c
 		e_w = dWeights[p];
 		h = dHs[p];
 		d2 = dDistance2(p_x, p_y, cell_x, cell_y);
-
-		if(d2 < CUT_OFF_FACTOR * h * h){
-			den += dGaussianKernel(h * h, d2) * p_w *e_w;
-		}
+		dx = cell_x - p_x;
+		dy = cell_y - p_y;
+		den += expf(-(dKarlGammaX * dx * dx + dKarlGammaY * dy * dy)) * p_w;
 
 		//den += dGaussianKernel(h * h, d2) * p_w *e_w;
 	}
