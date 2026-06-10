@@ -573,6 +573,11 @@ int main(int argc, char *argv[]){
 		}
 		///////////////////////// END OF START GPU EXLUSIVE TIMING /////////////////////////////
 
+		int NBLOCK_W = (dPoints.numberOfPoints + BLOCK_SIZE - 1) / BLOCK_SIZE;
+	    int GRID_SIZE_W = (int)(sqrtf(NBLOCK_W)) + 1;
+	    dim3 dimGrid_W(GRID_SIZE_W, GRID_SIZE_W);
+
+		if(Hoption != 0){
 		
 		///////////////////////// START SORTING TIMING /////////////////////////////
 		cudaEvent_t startSort;
@@ -721,11 +726,11 @@ int main(int argc, char *argv[]){
 		
 		// invoke kernels to compute edge effect correction weights (for each point)
 		// execution config.
-		int NBLOCK_W = (dPoints.numberOfPoints + BLOCK_SIZE - 1) / BLOCK_SIZE;
-	    int GRID_SIZE_W = (int)(sqrtf(NBLOCK_W)) + 1;
-	    dim3 dimGrid_W(GRID_SIZE_W, GRID_SIZE_W);
-
 		CalcEdgeCorrectionWeights<<<dimGrid_W, BLOCK_SIZE>>>(h * h, dPoints, dAscii, dWeights);
+		}
+		else{
+			printf("#Skipping boundary sort, kd tree, and edge weights for KARL-like raster baseline\n");
+		}
 
 		// Guiming @ 2016-03-17
 		/////////////////////////////////////////////////////////////////////////////////////////
