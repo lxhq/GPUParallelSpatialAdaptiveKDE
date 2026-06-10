@@ -257,9 +257,13 @@ __global__ void SearchBatch(const CUDA_KDNode *nodes, const int *indexes, const 
     Search(nodes, indexes, pts, queries[idx], &ret_index[idx], &ret_dist[idx]);
 }
 */
-//CUDA_KDTree::CUDA_KDTree()
-//{
-//}
+CUDA_KDTree::CUDA_KDTree()
+{
+    m_gpu_nodes = NULL;
+    m_gpu_indexes = NULL;
+    m_gpu_points = NULL;
+    m_num_points = 0;
+}
 
 CUDA_KDTree::~CUDA_KDTree()
 {

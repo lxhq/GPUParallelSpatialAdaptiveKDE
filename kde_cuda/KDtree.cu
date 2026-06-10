@@ -17,11 +17,19 @@ static KDtree *myself = NULL;
 KDtree::KDtree()
 {
     myself = this;
+    m_root = NULL;
+    m_pts = NULL;
+    m_current_axis = 0;
+    m_levels = 0;
+    m_cmps = 0;
     m_id = 0;
 }
 
 KDtree::~KDtree()
 {
+    if(m_root == NULL)
+        return;
+
     // Delete all the ndoes
     vector <KDNode*> to_visit;
 
