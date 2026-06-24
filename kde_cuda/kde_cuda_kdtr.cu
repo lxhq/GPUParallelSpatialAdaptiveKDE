@@ -34,6 +34,8 @@ void MeanCenter(SamplePoints Points, float &mean_x, float &mean_y);
 // (squared) standard distance of points
 void StandardDistance2(SamplePoints Points, float &d2);
 
+int RunStage0ExactKDV(int argc, char *argv[]);
+
 // bandwidth squared
 inline float BandWidth2(SamplePoints Points){
 	float d2;
@@ -184,7 +186,294 @@ float *gpuDen; // this is a global array allocated on gpu to store density value
 //float* zeroDen;
 int MAX_N_NBRS = 0;
 
+SamplePoints ReadStage0DataMatrix(const char *matrixFile){
+	FILE *f = fopen(matrixFile, "rt");
+	if (f == NULL)
+	{
+		printf("Error opening Stage 0 data matrix!\n");
+		exit(1);
+	}
+
+	int n = 0;
+	int dim = 0;
+	if(fscanf(f, "%d %d", &n, &dim) != 2 || n <= 0 || dim != 2){
+		printf("Stage 0 exact KDV expects a 2D .data matrix header '<rows> 2'.\n");
+		fclose(f);
+		exit(1);
+	}
+
+	SamplePoints Points;
+	Points.numberOfPoints = n;
+	Points.xCoordinates = (float*)malloc(n*sizeof(float));
+	Points.yCoordinates = (float*)malloc(n*sizeof(float));
+	Points.weights = (float*)malloc(n*sizeof(float));
+	Points.distances = (float*)malloc(n*sizeof(float));
+
+	for(int i = 0; i < n; i++){
+		double rowValue = 0.0;
+		double colValue = 0.0;
+		if(fscanf(f, "%lf %lf", &rowValue, &colValue) != 2){
+			printf("Failed to read Stage 0 data matrix row %d.\n", i);
+			fclose(f);
+			exit(1);
+		}
+		Points.xCoordinates[i] = (float)colValue;
+		Points.yCoordinates[i] = (float)rowValue;
+		Points.weights[i] = 1.0f;
+		Points.distances[i] = 0.0f;
+	}
+
+	fclose(f);
+	return Points;
+}
+
+void Stage0BoundsAndScottGamma(SamplePoints Points,
+							   float b,
+							   float &rowMin,
+							   float &rowMax,
+							   float &colMin,
+							   float &colMax,
+							   float &rowGamma,
+							   float &colGamma){
+	if(!(b > 0.0f)){
+		printf("Stage 0 Scott diagonal multiplier must be positive.\n");
+		exit(1);
+	}
+
+	double rowSum = 0.0;
+	double colSum = 0.0;
+	double rowSqSum = 0.0;
+	double colSqSum = 0.0;
+	int n = Points.numberOfPoints;
+	rowMin = FLOAT_MAX;
+	rowMax = -FLOAT_MAX;
+	colMin = FLOAT_MAX;
+	colMax = -FLOAT_MAX;
+
+	for(int i = 0; i < n; i++){
+		double rowValue = Points.yCoordinates[i];
+		double colValue = Points.xCoordinates[i];
+		rowSum += rowValue;
+		colSum += colValue;
+		rowSqSum += rowValue * rowValue;
+		colSqSum += colValue * colValue;
+		if(rowValue < rowMin) rowMin = (float)rowValue;
+		if(rowValue > rowMax) rowMax = (float)rowValue;
+		if(colValue < colMin) colMin = (float)colValue;
+		if(colValue > colMax) colMax = (float)colValue;
+	}
+
+	double dn = (double)n;
+	double rowMean = rowSum / dn;
+	double colMean = colSum / dn;
+	double rowVariance = rowSqSum / dn - rowMean * rowMean;
+	double colVariance = colSqSum / dn - colMean * colMean;
+	if(rowVariance < 0.0 && rowVariance > -1e-12) rowVariance = 0.0;
+	if(colVariance < 0.0 && colVariance > -1e-12) colVariance = 0.0;
+	if(rowVariance <= 0.0 || colVariance <= 0.0){
+		printf("Stage 0 Scott diagonal scale is undefined for zero-variance 2D data.\n");
+		exit(1);
+	}
+
+	double nFactor = pow(dn, -1.0 / 6.0);
+	double rowH = (double)b * sqrt(rowVariance) * nFactor;
+	double colH = (double)b * sqrt(colVariance) * nFactor;
+	rowGamma = (float)(1.0 / (2.0 * rowH * rowH));
+	colGamma = (float)(1.0 / (2.0 * colH * colH));
+}
+
+void WriteStage0GridOutput(AsciiRaster *Ascii, const char *outFile){
+	FILE *f = fopen(outFile, "w");
+	if (f == NULL)
+	{
+		printf("Error opening Stage 0 output file!\n");
+		exit(1);
+	}
+
+	for(unsigned int row = 0; row < Ascii->nRows; row++){
+		for(unsigned int col = 0; col < Ascii->nCols; col++){
+			if(col > 0) fprintf(f, " ");
+			fprintf(f, "%.10g", Ascii->elements[row*Ascii->nCols+col]);
+		}
+		fprintf(f, "\n");
+	}
+	fclose(f);
+}
+
+void CopyStage0ExactKDVParams(float rowMin,
+							  float rowStep,
+							  float colMin,
+							  float colStep,
+							  float rowGamma,
+							  float colGamma){
+	cudaError_t error;
+	error = cudaMemcpyToSymbol(dStage0RowMin, &rowMin, sizeof(float));
+	if (error != cudaSuccess)
+	{
+		printf("Failed to copy Stage 0 row min (error code %s)!\n", cudaGetErrorString(error));
+		exit(EXIT_FAILURE);
+	}
+	error = cudaMemcpyToSymbol(dStage0RowStep, &rowStep, sizeof(float));
+	if (error != cudaSuccess)
+	{
+		printf("Failed to copy Stage 0 row step (error code %s)!\n", cudaGetErrorString(error));
+		exit(EXIT_FAILURE);
+	}
+	error = cudaMemcpyToSymbol(dStage0ColMin, &colMin, sizeof(float));
+	if (error != cudaSuccess)
+	{
+		printf("Failed to copy Stage 0 col min (error code %s)!\n", cudaGetErrorString(error));
+		exit(EXIT_FAILURE);
+	}
+	error = cudaMemcpyToSymbol(dStage0ColStep, &colStep, sizeof(float));
+	if (error != cudaSuccess)
+	{
+		printf("Failed to copy Stage 0 col step (error code %s)!\n", cudaGetErrorString(error));
+		exit(EXIT_FAILURE);
+	}
+	error = cudaMemcpyToSymbol(dStage0GammaRow, &rowGamma, sizeof(float));
+	if (error != cudaSuccess)
+	{
+		printf("Failed to copy Stage 0 row gamma (error code %s)!\n", cudaGetErrorString(error));
+		exit(EXIT_FAILURE);
+	}
+	error = cudaMemcpyToSymbol(dStage0GammaCol, &colGamma, sizeof(float));
+	if (error != cudaSuccess)
+	{
+		printf("Failed to copy Stage 0 col gamma (error code %s)!\n", cudaGetErrorString(error));
+		exit(EXIT_FAILURE);
+	}
+}
+
+int RunStage0ExactKDV(int argc, char *argv[]){
+	if(argc != 7 || strcmp(argv[4], "--scott-diag") != 0){
+		printf("Run exact KDV:\n");
+		printf(" ./kde_cuda_kdtr data_matrix rows cols --scott-diag b output_file\n");
+		return 1;
+	}
+
+	char* dataFn = argv[1];
+	int nRows = atoi(argv[2]);
+	int nCols = atoi(argv[3]);
+	float scottB = (float)atof(argv[5]);
+	char* denCUDAfn = argv[6];
+	if(nRows <= 0 || nCols <= 0 || !(scottB > 0.0f)){
+		printf("Invalid Stage 0 exact KDV grid or Scott multiplier.\n");
+		return 1;
+	}
+
+	SamplePoints Points = ReadStage0DataMatrix(dataFn);
+	int dataRows = Points.numberOfPoints;
+	float rowMin, rowMax, colMin, colMax, rowGamma, colGamma;
+	Stage0BoundsAndScottGamma(Points, scottB, rowMin, rowMax, colMin, colMax, rowGamma, colGamma);
+	float rowStep = (nRows > 1) ? (rowMax - rowMin) / (float)(nRows - 1) : 0.0f;
+	float colStep = (nCols > 1) ? (colMax - colMin) / (float)(nCols - 1) : 0.0f;
+
+	AsciiRaster Mask = AllocateAsciiRaster(nCols, nRows, 0.0f, 0.0f, 1.0f, -9999.0f);
+	AsciiRaster DenSurf_CUDA = CopyAsciiRaster(Mask);
+	SamplePoints dPoints = AllocateDeviceSamplePoints(Points);
+	float* edgeWeights = AllocateEdgeCorrectionWeights(Points);
+	float* hs = AllocateBandwidths(Points.numberOfPoints);
+	for(int i = 0; i < Points.numberOfPoints; i++){
+		edgeWeights[i] = 1.0f;
+		hs[i] = 1.0f;
+	}
+	float* dWeights = AllocateDeviceEdgeCorrectionWeights(Points);
+	float* dHs = AllocateDeviceBandwidths(Points.numberOfPoints);
+	AsciiRaster dAscii = AllocateDeviceAsciiRaster(Mask);
+
+	CopyStage0ExactKDVParams(rowMin, rowStep, colMin, colStep, rowGamma, colGamma);
+	CopyToDeviceSamplePoints(dPoints, Points);
+	CopyToDeviceBandwidths(dHs, hs, Points.numberOfPoints);
+	CopyToDeviceAsciiRaster(dAscii, Mask);
+
+	cudaError_t error;
+	error = cudaMemcpy(dWeights, edgeWeights, Points.numberOfPoints*sizeof(float), cudaMemcpyHostToDevice);
+	if (error != cudaSuccess)
+    {
+        printf("ERROR in Stage 0 copy edge weights: %s\n", cudaGetErrorString(error));
+        exit(EXIT_FAILURE);
+    }
+
+	cudaEvent_t start;
+	error = cudaEventCreate(&start);
+	if (error != cudaSuccess)
+	{
+	   printf("Failed to create Stage 0 start event (error code %s)!\n", cudaGetErrorString(error));
+	   exit(EXIT_FAILURE);
+	}
+	cudaEvent_t stop;
+	error = cudaEventCreate(&stop);
+	if (error != cudaSuccess)
+	{
+	   printf("Failed to create Stage 0 stop event (error code %s)!\n", cudaGetErrorString(error));
+	   exit(EXIT_FAILURE);
+	}
+
+	int NBLOCK_K = (dAscii.nCols*dAscii.nRows + BLOCK_SIZE - 1) / BLOCK_SIZE;
+	int GRID_SIZE_K = (int)(sqrtf(NBLOCK_K)) + 1;
+	dim3 dimGrid_K(GRID_SIZE_K, GRID_SIZE_K);
+
+	error = cudaEventRecord(start, NULL);
+	if (error != cudaSuccess)
+	{
+	   printf("Failed to record Stage 0 start event (error code %s)!\n", cudaGetErrorString(error));
+	   exit(EXIT_FAILURE);
+	}
+	KernelDesityEstimation<<<dimGrid_K, BLOCK_SIZE>>>(dHs, dPoints, dAscii, dWeights);
+	error = cudaGetLastError();
+	if (error != cudaSuccess)
+	{
+	   printf("Failed to launch Stage 0 exact KDV kernel (error code %s)!\n", cudaGetErrorString(error));
+	   exit(EXIT_FAILURE);
+	}
+	error = cudaEventRecord(stop, NULL);
+	if (error != cudaSuccess)
+	{
+	   printf("Failed to record Stage 0 stop event (error code %s)!\n", cudaGetErrorString(error));
+	   exit(EXIT_FAILURE);
+	}
+	error = cudaEventSynchronize(stop);
+	if (error != cudaSuccess)
+	{
+	   printf("Failed to synchronize Stage 0 stop event (error code %s)!\n", cudaGetErrorString(error));
+	   exit(EXIT_FAILURE);
+	}
+	float elaps = 0.0f;
+	error = cudaEventElapsedTime(&elaps, start, stop);
+	if (error != cudaSuccess)
+	{
+	   printf("Failed to get Stage 0 elapsed time (error code %s)!\n", cudaGetErrorString(error));
+	   exit(EXIT_FAILURE);
+	}
+
+	CopyFromDeviceAsciiRaster(DenSurf_CUDA, dAscii);
+	WriteStage0GridOutput(&DenSurf_CUDA, denCUDAfn);
+
+	double executionSeconds = (double)elaps / 1000.0;
+	int queryCount = nRows * nCols;
+	double qps = executionSeconds > 0.0 ? (double)queryCount / executionSeconds : 0.0;
+	printf("timing_scope: in_memory_spatial_kdv_kernel\n");
+	printf("execution_seconds: %.9f\n", executionSeconds);
+	printf("query_count: %d\n", queryCount);
+	printf("qps: %.9f\n", qps);
+	printf("precision: FP32\n");
+	printf("scott_b: %.9f\n", scottB);
+	printf("data_rows: %d\n", dataRows);
+	printf("grid_rows: %d\n", nRows);
+	printf("grid_cols: %d\n", nCols);
+	fflush(stdout);
+
+	// Stage 0 mode is a one-shot process. Return after the output and timing
+	// contract is complete, leaving process teardown to release CUDA resources
+	// instead of exercising the original cleanup helpers outside their native
+	// execution path.
+
+	return 0;
+}
+
 int main(int argc, char *argv[]){
+	return RunStage0ExactKDV(argc, argv);
 
 	int NPNTS = 100;                // default # of points
 	float CELLSIZE = 1.0f;          // default cellsize
@@ -2382,15 +2671,15 @@ void SortSamplePoints(SamplePoints Points){
 // By Guiming @ 2016-09-07
 void BuildCPUKDtree (SamplePoints Points){
 	int NPTS = Points.numberOfPoints;
-	data = vector<Point>(NPTS);
+	::data = vector<Point>(NPTS);
 	for(int i = 0; i < NPTS; i++){
-		data[i].coords[0] = Points.xCoordinates[i];
-    data[i].coords[1] = Points.yCoordinates[i];
+		::data[i].coords[0] = Points.xCoordinates[i];
+    ::data[i].coords[1] = Points.yCoordinates[i];
 	}
-	int max_level = (int)(log(data.size())/log(2) / 2) + 1;
-	tree.Create(data, max_level);
+	int max_level = (int)(log(::data.size())/log(2) / 2) + 1;
+	tree.Create(::data, max_level);
 }
 
 void BuildGPUKDtree (){
-		GPU_tree.CreateKDTree(tree.GetRoot(), tree.GetNumNodes(), data);
+		GPU_tree.CreateKDTree(tree.GetRoot(), tree.GetNumNodes(), ::data);
 }

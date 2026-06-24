@@ -261,11 +261,22 @@ __global__ void SearchBatch(const CUDA_KDNode *nodes, const int *indexes, const 
 //{
 //}
 
+CUDA_KDTree::CUDA_KDTree()
+{
+    m_gpu_nodes = NULL;
+    m_gpu_indexes = NULL;
+    m_gpu_points = NULL;
+    m_num_points = 0;
+}
+
 CUDA_KDTree::~CUDA_KDTree()
 {
-    cudaFree(m_gpu_nodes);
-    cudaFree(m_gpu_indexes);
-    cudaFree(m_gpu_points);
+    if(m_gpu_nodes)
+        cudaFree(m_gpu_nodes);
+    if(m_gpu_indexes)
+        cudaFree(m_gpu_indexes);
+    if(m_gpu_points)
+        cudaFree(m_gpu_points);
 }
 
 void CUDA_KDTree::CreateKDTree(KDNode *root, int num_nodes, const vector <Point> &data)

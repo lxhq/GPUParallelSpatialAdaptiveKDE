@@ -17,7 +17,7 @@ using namespace std;
 class CUDA_KDTree
 {
 public:
-    //CUDA_KDTree();
+    CUDA_KDTree();
     ~CUDA_KDTree();
     void CreateKDTree(KDNode *root, int num_nodes, const vector <Point> &data);
     //void Search(const vector <Point> &queries, vector <int> &indexes, vector <float> &dists); // nearest neighbor search

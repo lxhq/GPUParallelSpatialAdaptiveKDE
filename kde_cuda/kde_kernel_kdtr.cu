@@ -22,6 +22,12 @@
 
 __device__ float dReductionSum = 1.0f; // sum of log of densities
 __device__ float dDen0_0 = 1.0f; // sum of log of densities
+__device__ float dStage0RowMin = 0.0f;
+__device__ float dStage0RowStep = 0.0f;
+__device__ float dStage0ColMin = 0.0f;
+__device__ float dStage0ColStep = 0.0f;
+__device__ float dStage0GammaRow = 1.0f;
+__device__ float dStage0GammaCol = 1.0f;
 
 
 __device__ float Distance(const Point &a, const Point &b)
@@ -331,16 +337,11 @@ __global__ void KernelDesityEstimation(float* dHs, const SamplePoints dPoints, c
 		return;
 	}
 
-	// otherwise, do KDE
-	float cellSize = dAscii.cellSize;
-	float xLLCorner = dAscii.xLLCorner;
-	float yLLCorner = dAscii.yLLCorner;
+	// otherwise, do exact raw KDV for the Stage 0 baseline branch.
 	float noDataValue = dAscii.noDataValue;
 	float cell_x, cell_y; // x,y coord of cell
 	float p_x, p_y, p_w;    // x, y coord, weight of point
 	int numPoints = dPoints.numberOfPoints;
-	float h, d2;
-	float e_w = 1.0f;    // edge effect correction weight
 	float den;
 	int col, row;
 
@@ -348,9 +349,10 @@ __global__ void KernelDesityEstimation(float* dHs, const SamplePoints dPoints, c
 	row = tid / nCols;
 	col = tid - row * nCols;
 
-	// x, y coord of this cell
-	cell_y = ROW_TO_YCOORD(row, nRows, yLLCorner, cellSize);
-	cell_x = COL_TO_XCOORD(col, xLLCorner, cellSize);
+	// The benchmark grid uses independent row and column steps instead of the
+	// original raster cell-size mapping.
+	cell_y = dStage0RowMin + row * dStage0RowStep;
+	cell_x = dStage0ColMin + col * dStage0ColStep;
 
 	// should do KDE on this cell?
 	float val = dAscii.elements[tid];
@@ -364,15 +366,9 @@ __global__ void KernelDesityEstimation(float* dHs, const SamplePoints dPoints, c
 		p_x = dPoints.xCoordinates[p];
 		p_y = dPoints.yCoordinates[p];
 		p_w = dPoints.weights[p];
-		e_w = dWeights[p];
-		h = dHs[p];
-		d2 = dDistance2(p_x, p_y, cell_x, cell_y);
-
-		if(d2 < CUT_OFF_FACTOR * h * h){
-			den += dGaussianKernel(h * h, d2) * p_w *e_w;
-		}
-
-		//den += dGaussianKernel(h * h, d2) * p_w *e_w;
+		float dx = cell_x - p_x;
+		float dy = cell_y - p_y;
+		den += expf(-(dStage0GammaCol * dx * dx + dStage0GammaRow * dy * dy)) * p_w;
 	}
 	dAscii.elements[tid] = den; // intensity, not probability
 }
